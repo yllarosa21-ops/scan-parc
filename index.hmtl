@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Scanner - Parc instrumental</title>
+<style>
+  body { margin:0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif; background:#f4f6f5; color:#1d2b26; }
+  header { background:#2f5d50; color:#fff; padding:12px 16px; font-size:18px; font-weight:600; }
+  main { padding:16px; max-width:560px; margin:0 auto; }
+  video { width:100%; border-radius:12px; background:#000; }
+  button { display:block; width:100%; padding:16px; margin:10px 0; font-size:17px; font-weight:600; border:0; border-radius:12px; background:#2f5d50; color:#fff; }
+  button.sec { background:#fff; color:#2f5d50; border:2px solid #2f5d50; }
+  #msg { padding:12px; border-radius:10px; margin:10px 0; font-size:15px; background:#e3f1ea; color:#2f5d50; }
+  #msg.err { background:#fbeae0; color:#b4531a; }
+  small { color:#5d6b66; }
+</style>
+</head>
+<body>
+<header>Scanner un instrument</header>
+<main>
+  <div id="msg">Démarrage de la caméra...</div>
+  <video id="video" playsinline muted></video>
+  <canvas id="canvas" style="display:none"></canvas>
+  <button class="sec" id="btnRelance">Relancer la caméra</button>
+  <button class="sec" id="btnApp">Changer l'adresse de l'application</button>
+  <small id="appUrl"></small>
+</main>
+<script>
+// Chargement du lecteur QR avec sources de secours.
+(function () {
+  var urls = ['https://cdnjs.cloudflare.com/ajax/libs/jsQR/1.4.0/jsQR.min.js',
+              'https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js',
+              'https://unpkg.com/jsqr@1.4.0/dist/jsQR.js'];
+  function essai(i) {
+    if (typeof jsQR === 'function' || i >= urls.length) return;
+    var s = document.createElement('script');
+    s.src = urls[i];
+    s.onerror = function () { essai(i + 1); };
+    document.head.appendChild(s);
+  }
+  essai(0);
+})();
+</script>
+<script>
+(function () {
+  var $ = function (id) { return document.getElementById(id); };
+  var stream = null, scanning = false, detector = null;
+
+  function msg(t, err) { $('msg').textContent = t; $('msg').className = err ? 'err' : ''; }
+  function lire(k) { try { return localStorage.getItem(k); } catch (e) { return null; } }
+  function ecrire(k, v) { try { localStorage.setItem(k, v); } catch (e) {} }
+
+  // Adresse de l'application (celle qui se termine par /exec), demandée une seule fois.
+  function adresse(forcer) {
+    var a = (forcer ? null : lire('appUrl'));
+    if (!a) {
+      a = prompt('Collez l\'adresse de votre application (celle qui se termine par /exec) :', lire('appUrl') || '');
+      if (a) { a = a.trim(); ecrire('appUrl', a); }
+    }
+    $('appUrl').textContent = a ? 'Application : ' + a : '';
+    return a;
+  }
+  $('btnApp').onclick = function () { adresse(true); };
+  $('btnRelance').onclick = demarrer;
+
+  function ouvrir(texte) {
+    var a = adresse(false);
+    if (!a) return msg('Adresse de l\'application manquante.', true);
+    scanning = false;
+    if (stream) stream.getTracks().forEach(function (t) { t.stop(); });
+    msg('QR code lu, ouverture de la fiche...');
+    var sep = a.indexOf('?') === -1 ? '?' : '&';
+    window.location.href = a + sep + 'q=' + encodeURIComponent(texte);
+  }
+
+  function demarrer() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      return msg('Caméra indisponible : la page doit être ouverte en https dans le navigateur.', true);
+    }
+    if ('BarcodeDetector' in window) { try { detector = new BarcodeDetector({ formats: ['qr_code'] }); } catch (e) {} }
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } }).then(function (s) {
+      stream = s; $('video').srcObject = s; $('video').play();
+      scanning = true; msg('Visez le QR code de l\'instrument.'); tick();
+    }).catch(function (e) { msg('Caméra refusée (' + (e && e.name) + '). Autorisez la caméra pour ce site, puis "Relancer la caméra".', true); });
+  }
+
+  function tick() {
+    if (!scanning) return;
+    var v = $('video');
+    if (v.readyState === v.HAVE_ENOUGH_DATA) {
+      if (detector) {
+        detector.detect(v).then(function (r) {
+          if (r && r.length && r[0].rawValue) ouvrir(r[0].rawValue); else suite();
+        }).catch(suite);
+        return;
+      }
+      if (typeof jsQR === 'function') {
+        var c = $('canvas'), ctx = c.getContext('2d');
+        c.width = v.videoWidth; c.height = v.videoHeight;
+        ctx.drawImage(v, 0, 0, c.width, c.height);
+        var d = ctx.getImageData(0, 0, c.width, c.height);
+        var code = jsQR(d.data, d.width, d.height, { inversionAttempts: 'dontInvert' });
+        if (code && code.data) return ouvrir(code.data);
+      }
+    }
+    suite();
+  }
+  function suite() { if (scanning) requestAnimationFrame(tick); }
+
+  adresse(false);
+  demarrer();
+})();
+</script>
+</body>
+</html>
